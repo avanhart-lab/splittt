@@ -1,5 +1,83 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
+// ── SUPABASE CLIENT ───────────────────────────────────────────────────────────
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || "";
+
+async function sbFetch(path, opts={}) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) return { data: null, error: "No Supabase config" };
+  const url = `${SUPABASE_URL}/rest/v1${path}`;
+  const headers = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": `Bearer ${SUPABASE_KEY}`,
+    "Content-Type": "application/json",
+    "Prefer": opts.prefer || "return=representation",
+    ...(opts.headers || {})
+  };
+  try {
+    const res = await fetch(url, { ...opts, headers });
+    const text = await res.text();
+    if (!res.ok) return { data: null, error: text };
+    const data = text ? JSON.parse(text) : null;
+    return { data, error: null };
+  } catch (e) {
+    return { data: null, error: String(e) };
+  }
+}
+
+// Generate short random ID
+function genId(len=8) {
+  return Math.random().toString(36).slice(2, 2+len);
+}
+
+// Debt simplification — returns minimum set of transfers to settle all balances
+function simplifyDebts(members, receipts) {
+  // Calculate net balance per person (positive = owed money, negative = owes money)
+  const balance = {};
+  members.forEach(m => { balance[m] = 0; });
+
+  receipts.forEach(r => {
+    if (r.settled) return;
+    const payers = Array.isArray(r.payer) ? r.payer : [r.payer || r.paidBy || members[0]];
+    const people = r.people || members;
+    const personTotals = r.person_totals || r.personTotals || {};
+
+    people.forEach(p => {
+      if (!balance[p] && balance[p] !== 0) balance[p] = 0;
+      const share = personTotals[p] ?? (r.total / people.length);
+      balance[p] -= share; // everyone owes their share
+    });
+
+    payers.forEach(p => {
+      if (!balance[p] && balance[p] !== 0) balance[p] = 0;
+      // payer gets credit for what others owe
+      const payerShare = personTotals[p] ?? (r.total / people.length);
+      balance[p] += r.total - payerShare; // net: they paid total but only owe their share
+    });
+  });
+
+  // Greedy min-transfers algorithm
+  const creditors = [], debtors = [];
+  Object.entries(balance).forEach(([name, bal]) => {
+    const rounded = Math.round(bal * 100) / 100;
+    if (rounded > 0.005) creditors.push({ name, amount: rounded });
+    else if (rounded < -0.005) debtors.push({ name, amount: -rounded });
+  });
+
+  const transfers = [];
+  let ci = 0, di = 0;
+  while (ci < creditors.length && di < debtors.length) {
+    const c = creditors[ci], d = debtors[di];
+    const amt = Math.min(c.amount, d.amount);
+    transfers.push({ from: d.name, to: c.name, amount: Math.round(amt * 100) / 100 });
+    c.amount -= amt;
+    d.amount -= amt;
+    if (c.amount < 0.005) ci++;
+    if (d.amount < 0.005) di++;
+  }
+  return transfers;
+}
+
 // ── HEIC CONVERSION ───────────────────────────────────────────────────────────
 // Converts HEIC/HEIF files (iPhone default format) to JPEG before use.
 // Falls back gracefully if heic2any isn't available or file isn't HEIC.
@@ -243,7 +321,7 @@ Rules:
         "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
+        model: "claude-haiku-3-5-20241022",
         max_tokens: 1024,
         messages: [{
           role: "user",
@@ -563,7 +641,7 @@ function ItemizedSplitter({ scanResult, people, onConfirm, onBack, tripCurrency=
 }
 
 // ── PAY STEP ─────────────────────────────────────────────────────────────────
-function PayStep({ receipt, onClose, onBack, venmoHandle="", zelleHandle="", t }) {
+function PayStep({ receipt, onClose, onBack, venmoHandle="", zelleHandle="", friends=[], t }) {
   const [method, setMethod] = useState("venmo");
   const VENMO_COLOR = "#3D95CE";
   const ZELLE_COLOR = "#6D1ED4";
@@ -584,15 +662,25 @@ function PayStep({ receipt, onClose, onBack, venmoHandle="", zelleHandle="", t }
   const myVenmo = venmoHandle.replace(/^@/, "") || "me";
   const myZelle = zelleHandle || "";
 
-  const venmoPayLink = (recipientHandle, amount, n) => {
-    const clean = (recipientHandle || "").replace(/^@/, "");
-    return clean ? `https://venmo.com/u/${encodeURIComponent(clean)}` : "https://venmo.com/";
+  // Look up a person's Venmo/Zelle handle from the friends list by name
+  const getFriendVenmo = (name) => {
+    const f = friends.find(f => f.name.toLowerCase() === name.toLowerCase());
+    return f?.venmo ? f.venmo.replace(/^@/, "") : null;
+  };
+  const getFriendZelle = (name) => {
+    const f = friends.find(f => f.name.toLowerCase() === name.toLowerCase());
+    return f?.zelle || null;
+  };
+
+  const venmoPayLink = (personName, amount, n) => {
+    const handle = getFriendVenmo(personName) || personName.replace(/^@/, "");
+    return handle ? `https://venmo.com/u/${encodeURIComponent(handle)}` : "https://venmo.com/";
   };
   const venmoRequestLink = (amount, n) =>
     `https://venmo.com/u/${encodeURIComponent(myVenmo)}`;
-  const zellePayLink = (recipientHandle, amount) => {
-    const clean = (recipientHandle || "").replace(/^@/, "");
-    return `zelle://send?recipients=${encodeURIComponent(clean)}&amount=${amount.toFixed(2)}`;
+  const zellePayLink = (personName, amount) => {
+    const handle = getFriendZelle(personName) || personName;
+    return `zelle://send?recipients=${encodeURIComponent(handle)}&amount=${amount.toFixed(2)}`;
   };
   const zelleRequestLink = (amount) =>
     `zelle://request?recipients=${encodeURIComponent(myZelle)}&amount=${amount.toFixed(2)}`;
@@ -647,7 +735,7 @@ function PayStep({ receipt, onClose, onBack, venmoHandle="", zelleHandle="", t }
               {payersToPayBack.map(p => (
                 <button key={p} className="press" onClick={()=>window.open(method==="venmo"?venmoPayLink(p, perPayer, note):zellePayLink(p, perPayer), "_blank")} style={{ width:"100%", padding:"15px", background:activeColor, border:"none", borderRadius:12, color:"#fff", fontSize:15, fontWeight:700, fontFamily:"'Syne',sans-serif", display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
                   {method==="venmo" ? <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12.5 2C11.3 4.5 9.5 7.4 8 9.2L6.2 4H2.5L5.5 14h3.8C11.5 11 14 6.5 14 4c0-1-.5-1.8-1.5-2z" fill="#fff"/></svg> : <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 3h10v2.5L6.5 10H13v3H3v-2.5L9.5 6H3V3z" fill="#fff"/></svg>}
-                  Pay @{p} ${perPayer.toFixed(2)}
+                  Pay @{(method==="venmo" ? getFriendVenmo(p) : getFriendZelle(p)) || p} ${perPayer.toFixed(2)}
                 </button>
               ))}
             </div>
@@ -752,7 +840,7 @@ function PayStep({ receipt, onClose, onBack, venmoHandle="", zelleHandle="", t }
 // ── ADD RECEIPT SHEET ─────────────────────────────────────────────────────────
 // Flow: capture → scanning → itemize → confirm → pay
 //       (manual fallback: form → pay)
-function AddReceiptSheet({ trips, onClose, onAdd, t, defaultTrip=null, venmoHandle="", zelleHandle="", homeCurrency="USD", tripCurrency="USD", exchangeRate=null }) {
+function AddReceiptSheet({ trips, onClose, onAdd, t, defaultTrip=null, venmoHandle="", zelleHandle="", friends=[], homeCurrency="USD", tripCurrency="USD", exchangeRate=null }) {
   const [mode, setMode] = useState("capture"); // capture|scanning|itemize|confirm|pay|manual
   const [photo, setPhoto] = useState(null);
   const [scanResult, setScanResult] = useState(null);
@@ -906,7 +994,7 @@ function AddReceiptSheet({ trips, onClose, onAdd, t, defaultTrip=null, venmoHand
   // ── PAY ──────────────────────────────────────────────────────────────────────
   if (mode === "pay" && savedReceipt) return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:300, display:"flex", flexDirection:"column", justifyContent:"flex-end" }}>
-      <PayStep receipt={savedReceipt} onClose={onClose} onBack={()=>setMode("confirm")} venmoHandle={venmoHandle} zelleHandle={zelleHandle} t={t}/>
+      <PayStep receipt={savedReceipt} onClose={onClose} onBack={()=>setMode("confirm")} venmoHandle={venmoHandle} zelleHandle={zelleHandle} friends={friends} t={t}/>
     </div>
   );
 
@@ -1229,7 +1317,13 @@ function AddTripSheet({ onClose, onAdd, t }) {
     setPeople(prev=>[...prev, clean]);
     setCustomInput("");
   };
-  const handleAdd = ()=>{ if(!name)return; onAdd({id:Date.now(),name,memberNames:people,dates:dates||"Upcoming",icon}); onClose(); };
+  const handleAdd = async ()=>{
+    if(!name)return;
+    const tripId = genId(10);
+    const trip = {id:tripId, name, memberNames:people, dates:dates||"Upcoming", icon, shared:false};
+    onAdd(trip);
+    onClose();
+  };
 
   return (
     <Overlay onClose={onClose} t={t}>
@@ -1286,6 +1380,304 @@ function AddTripSheet({ onClose, onAdd, t }) {
         <ActionBtn onClick={handleAdd} t={t}>Create Trip</ActionBtn>
       </div>
     </Overlay>
+  );
+}
+
+// ── SHARE TRIP MODAL ──────────────────────────────────────────────────────────
+function ShareTripModal({ trip, onClose, onShared, t }) {
+  const [status, setStatus] = useState("idle"); // idle | creating | done | error
+  const [shareUrl, setShareUrl] = useState(trip.shareUrl || "");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (trip.shareUrl) { setShareUrl(trip.shareUrl); setStatus("done"); }
+  }, [trip.shareUrl]);
+
+  const createShareLink = async () => {
+    setStatus("creating");
+    // Upsert trip into Supabase
+    const { error } = await sbFetch(`/trips?id=eq.${trip.id}`, {
+      method: "POST",
+      prefer: "resolution=merge-duplicates",
+      body: JSON.stringify({
+        id: trip.id,
+        name: trip.name,
+        members: trip.memberNames || [],
+      })
+    });
+    if (error && !error.includes("already exists") && !error.includes("duplicate")) {
+      setStatus("error");
+      return;
+    }
+    const url = `${window.location.origin}${window.location.pathname}?trip=${trip.id}`;
+    setShareUrl(url);
+    setStatus("done");
+    onShared({ ...trip, shareUrl: url, shared: true });
+  };
+
+  const copy = () => {
+    navigator.clipboard.writeText(shareUrl).then(() => { setCopied(true); setTimeout(()=>setCopied(false), 2000); });
+  };
+
+  return (
+    <Overlay onClose={onClose} t={t}>
+      <SheetHandle t={t}/>
+      <SheetHeader title="Share trip" sub="Let your group join from their phones" onClose={onClose} t={t}/>
+      <div style={{ padding:"0 22px 36px", display:"flex", flexDirection:"column", gap:16 }}>
+        {status === "idle" && (
+          <>
+            <div style={{ background:t.surface, border:`1px solid ${t.border}`, borderRadius:12, padding:"16px", fontSize:14, color:t.textSecondary, lineHeight:1.6 }}>
+              Generate a link anyone can open to join this trip and add their own receipts. Everyone sees the full group breakdown.
+            </div>
+            <ActionBtn onClick={createShareLink} t={t}>Generate share link</ActionBtn>
+          </>
+        )}
+        {status === "creating" && (
+          <div style={{ textAlign:"center", padding:"24px 0", color:t.textSecondary, fontSize:14 }}>Creating shared trip...</div>
+        )}
+        {status === "error" && (
+          <div style={{ background:"#fee", border:"1px solid #fcc", borderRadius:12, padding:"14px", fontSize:13, color:"#c00" }}>
+            Couldn't create share link. Check your Supabase setup and try again.
+          </div>
+        )}
+        {status === "done" && shareUrl && (
+          <>
+            <div style={{ background:t.surface, border:`1px solid ${t.border}`, borderRadius:12, padding:"14px 16px" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:t.textMuted, textTransform:"uppercase", letterSpacing:0.5, marginBottom:6 }}>Share link</div>
+              <div style={{ fontSize:13, color:t.text, wordBreak:"break-all", lineHeight:1.5 }}>{shareUrl}</div>
+            </div>
+            <button className="press" onClick={copy} style={{ width:"100%", padding:"14px", background:copied?t.accentMuted||t.surface:t.accent, border:"none", borderRadius:12, color:copied?t.accent:t.accentText, fontSize:14, fontWeight:600 }}>
+              {copied ? "Copied!" : "Copy link"}
+            </button>
+            <div style={{ fontSize:12, color:t.textMuted, textAlign:"center" }}>
+              Anyone with this link can add receipts to <strong style={{color:t.text}}>{trip.name}</strong>
+            </div>
+          </>
+        )}
+      </div>
+    </Overlay>
+  );
+}
+
+// ── JOIN TRIP PROMPT ───────────────────────────────────────────────────────────
+function JoinTripPrompt({ tripId, onJoin, onCancel, t }) {
+  const [name, setName] = useState("");
+  const [trip, setTrip] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await sbFetch(`/trips?id=eq.${tripId}&select=*`);
+      if (error || !data || !data[0]) { setError("Trip not found. The link may be expired or invalid."); setLoading(false); return; }
+      setTrip(data[0]);
+      setLoading(false);
+    })();
+  }, [tripId]);
+
+  const handleJoin = () => {
+    if (!name.trim()) return;
+    lsSet("splittt_myName", name.trim());
+    onJoin(trip, name.trim());
+  };
+
+  if (loading) return (
+    <div style={{ fontFamily:"'DM Sans',sans-serif", background:t.bg, minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ fontSize:16, color:t.textSecondary }}>Loading trip...</div>
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ fontFamily:"'DM Sans',sans-serif", background:t.bg, minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", padding:"24px" }}>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ fontSize:18, fontWeight:700, color:t.text, marginBottom:12 }}>Trip not found</div>
+        <div style={{ fontSize:14, color:t.textSecondary, marginBottom:24 }}>{error}</div>
+        <button className="press" onClick={onCancel} style={{ padding:"12px 24px", background:t.accent, border:"none", borderRadius:12, color:t.accentText, fontWeight:600 }}>Go home</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ fontFamily:"'DM Sans',sans-serif", background:t.bg, minHeight:"100vh", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"32px 24px" }}>
+      <style>{STYLES}</style>
+      <div style={{ width:"100%", maxWidth:380 }}>
+        <div style={{ fontSize:28, fontWeight:800, fontFamily:"'Syne',sans-serif", color:t.text, marginBottom:4 }}>{trip.name}</div>
+        <div style={{ fontSize:14, color:t.textSecondary, marginBottom:32 }}>You've been invited to this trip. Enter your name to join.</div>
+        <InputField label="Your name" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Alex" t={t}/>
+        <div style={{ marginTop:16 }}>
+          <ActionBtn onClick={handleJoin} t={t}>Join trip</ActionBtn>
+        </div>
+        <button onClick={onCancel} style={{ width:"100%", marginTop:12, padding:"12px", background:"none", border:"none", color:t.textSecondary, fontSize:14, cursor:"pointer" }}>Go to my own feed instead</button>
+      </div>
+    </div>
+  );
+}
+
+// ── SHARED TRIP VIEW ────────────────────────────────────────────────────────────
+function SharedTripView({ trip, myName, onBack, onVenmo, t }) {
+  const [receipts, setReceipts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAddReceipt, setShowAddReceipt] = useState(false);
+  const [shareModal, setShareModal] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [friends] = useState(() => {
+    try { return JSON.parse(lsGet("splittt_friends") || "[]"); } catch { return []; }
+  });
+  const venmoHandle = lsGet("splittt_venmo") || "";
+  const zelleHandle = lsGet("splittt_zelle") || "";
+
+  const shareUrl = `${window.location.origin}${window.location.pathname}?trip=${trip.id}`;
+
+  const loadReceipts = useCallback(async () => {
+    const { data } = await sbFetch(`/receipts?trip_id=eq.${trip.id}&order=created_at.desc`);
+    if (data) setReceipts(data.map(r => ({
+      ...r,
+      people: r.people || [],
+      person_totals: r.person_totals || {},
+      personTotals: r.person_totals || {},
+      payer: r.payer || [],
+    })));
+    setLoading(false);
+  }, [trip.id]);
+
+  useEffect(() => { loadReceipts(); }, [loadReceipts]);
+
+  // Real-time subscription via long-poll fallback (polling every 8 sec)
+  useEffect(() => {
+    const interval = setInterval(loadReceipts, 8000);
+    return () => clearInterval(interval);
+  }, [loadReceipts]);
+
+  const addReceipt = async (r) => {
+    const rec = {
+      id: genId(12),
+      trip_id: trip.id,
+      name: r.name,
+      total: r.total,
+      date: r.date,
+      people: r.people || [],
+      payer: r.payer || [],
+      person_totals: r.personTotals || r.person_totals || {},
+      itemized: r.itemized || null,
+      added_by: myName,
+    };
+    await sbFetch("/receipts", { method:"POST", body: JSON.stringify(rec) });
+    loadReceipts();
+  };
+
+  const allMembers = Array.from(new Set([
+    ...(trip.members || []),
+    ...receipts.flatMap(r => r.people || []),
+    myName
+  ]));
+
+  const transfers = simplifyDebts(allMembers, receipts);
+  const myTransfers = transfers.filter(t => t.from === myName || t.to === myName);
+
+  const copy = () => {
+    navigator.clipboard.writeText(shareUrl).then(() => { setCopied(true); setTimeout(()=>setCopied(false), 2000); });
+  };
+
+  const themeKey = lsGet("splittt_theme") || "light";
+  const tVal = THEMES[themeKey] || THEMES["light"];
+
+  return (
+    <div style={{ fontFamily:"'DM Sans',sans-serif", background:tVal.bg, minHeight:"100vh", color:tVal.text, maxWidth:430, width:"100%", margin:"0 auto" }}>
+      <style>{STYLES}</style>
+
+      {/* Header */}
+      <div style={{ padding:"48px 20px 16px", display:"flex", alignItems:"center", gap:12 }}>
+        <button className="press" onClick={onBack} style={{ background:"none", border:"none", color:tVal.text, padding:"4px 0", cursor:"pointer" }}>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12 4l-6 6 6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:20, fontWeight:800, fontFamily:"'Syne',sans-serif" }}>{trip.name}</div>
+          <div style={{ fontSize:12, color:tVal.textSecondary }}>Shared trip · {allMembers.length} people</div>
+        </div>
+        <button className="press" onClick={copy} style={{ padding:"8px 14px", background:copied?tVal.surface:tVal.accent, border:`1px solid ${tVal.border}`, borderRadius:10, color:copied?tVal.accent:tVal.accentText, fontSize:12, fontWeight:600 }}>
+          {copied ? "Copied!" : "Share"}
+        </button>
+      </div>
+
+      {/* My balance summary */}
+      {myTransfers.length > 0 && (
+        <div style={{ margin:"0 20px 16px", background:tVal.surface, border:`1px solid ${tVal.border}`, borderRadius:14, padding:"14px 16px" }}>
+          <div style={{ fontSize:11, fontWeight:600, color:tVal.textMuted, textTransform:"uppercase", letterSpacing:0.5, marginBottom:10 }}>Your settlements</div>
+          {myTransfers.map((tr,i) => (
+            <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom: i<myTransfers.length-1?`1px solid ${tVal.border}`:"none" }}>
+              <div style={{ fontSize:14, color:tVal.text }}>
+                {tr.from === myName ? <>You owe <strong>{tr.to}</strong></> : <><strong>{tr.from}</strong> owes you</>}
+              </div>
+              <div style={{ fontSize:15, fontWeight:700, color:tr.from===myName?"#e74c3c":"#27ae60" }}>${tr.amount.toFixed(2)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* All settlements */}
+      {transfers.length > 0 && (
+        <div style={{ margin:"0 20px 16px", background:tVal.surface, border:`1px solid ${tVal.border}`, borderRadius:14, padding:"14px 16px" }}>
+          <div style={{ fontSize:11, fontWeight:600, color:tVal.textMuted, textTransform:"uppercase", letterSpacing:0.5, marginBottom:10 }}>Group settlement</div>
+          {transfers.map((tr,i) => (
+            <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom: i<transfers.length-1?`1px solid ${tVal.border}`:"none" }}>
+              <div style={{ fontSize:13, color:tVal.textSecondary }}><strong style={{color:tVal.text}}>{tr.from}</strong> → <strong style={{color:tVal.text}}>{tr.to}</strong></div>
+              <div style={{ fontSize:14, fontWeight:700, color:tVal.text }}>${tr.amount.toFixed(2)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Receipts list */}
+      <div style={{ padding:"0 20px 120px" }}>
+        <div style={{ fontSize:13, fontWeight:600, color:tVal.textMuted, textTransform:"uppercase", letterSpacing:0.5, marginBottom:12 }}>
+          Receipts ({receipts.length})
+        </div>
+        {loading && <div style={{ textAlign:"center", padding:"32px 0", color:tVal.textSecondary }}>Loading...</div>}
+        {!loading && receipts.length === 0 && (
+          <div style={{ textAlign:"center", padding:"32px 0", color:tVal.textSecondary, fontSize:14 }}>No receipts yet. Add the first one!</div>
+        )}
+        {receipts.map((r,i) => (
+          <div key={r.id} className="fu" style={{ background:tVal.surface, border:`1px solid ${tVal.border}`, borderRadius:14, padding:"14px 16px", marginBottom:8, animationDelay:`${i*0.05}s` }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div>
+                <div style={{ fontSize:14, fontWeight:600, color:tVal.text }}>{r.name}</div>
+                <div style={{ fontSize:12, color:tVal.textSecondary, marginTop:2 }}>{r.date} · Added by {r.added_by || "someone"}</div>
+              </div>
+              <div style={{ fontSize:16, fontWeight:700, fontFamily:"'Syne',sans-serif", color:tVal.text }}>${Number(r.total).toFixed(2)}</div>
+            </div>
+            {r.people && r.people.length > 0 && (
+              <div style={{ marginTop:8, display:"flex", gap:6, flexWrap:"wrap" }}>
+                {r.people.map(p => (
+                  <span key={p} style={{ padding:"2px 8px", background:tVal.inputBg, borderRadius:6, fontSize:11, color:tVal.textSecondary }}>{p}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Add receipt FAB */}
+      <div style={{ position:"fixed", bottom:28, left:0, right:0, maxWidth:430, margin:"0 auto", padding:"0 24px", zIndex:50 }}>
+        <button className="press" onClick={()=>setShowAddReceipt(true)} style={{ width:"100%", padding:"16px", background:tVal.accent, border:"none", borderRadius:14, color:tVal.accentText, fontSize:15, fontWeight:700, boxShadow:`0 4px 24px ${tVal.accent}66` }}>
+          + Add receipt
+        </button>
+      </div>
+
+      {showAddReceipt && (
+        <AddReceiptSheet
+          onClose={()=>setShowAddReceipt(false)}
+          onAdd={r=>{ addReceipt(r); setShowAddReceipt(false); }}
+          trip={{ name: trip.name, memberNames: allMembers }}
+          venmoHandle={venmoHandle}
+          zelleHandle={zelleHandle}
+          friends={friends}
+          homeCurrency={lsGet("splittt_homeCurrency")||"USD"}
+          tripCurrency={lsGet("splittt_tripCurrency")||"USD"}
+          exchangeRate={null}
+          t={tVal}
+        />
+      )}
+    </div>
   );
 }
 
@@ -1720,7 +2112,7 @@ function TripDetail({ trip, allReceipts, onBack, onVenmo, onAddReceipt, onUpdate
   const perPerson = trip.memberNames.length ? total/trip.memberNames.length : 0;
 
   return (
-    <div style={{ fontFamily:"'DM Sans',sans-serif", background:t.bg, height:"100vh", overflowY:"auto", overflowX:"hidden", color:t.text, maxWidth:430, width:"100%", margin:"0 auto", position:"relative", transform:"translateZ(0)", willChange:"transform" }}>
+    <div style={{ fontFamily:"'DM Sans',sans-serif", background:t.bg, minHeight:"100vh", color:t.text, maxWidth:430, width:"100%", margin:"0 auto", position:"relative", transform:"translateZ(0)" }}>
       {/* Header */}
       <div style={{ padding:"52px 20px 0" }}>
         <button onClick={onBack} className="press" style={{ background:"none", border:"none", color:t.textSecondary, fontSize:13, fontWeight:500, display:"flex", alignItems:"center", gap:5, marginBottom:22, padding:0 }}>
@@ -2136,7 +2528,7 @@ function PlusTab({ trips, onAddReceipt, onReceiptDone, onAddTrip, venmoHandle, z
         </div>
       </div>
 
-      {showReceipt&&<AddReceiptSheet trips={trips} onClose={()=>{ setShowReceipt(false); onReceiptDone?.(); }} onAdd={onAddReceipt} venmoHandle={venmoHandle} zelleHandle={zelleHandle} homeCurrency={homeCurrency} tripCurrency={tripCurrency} exchangeRate={exchangeRate} t={t}/>}
+      {showReceipt&&<AddReceiptSheet trips={trips} onClose={()=>{ setShowReceipt(false); onReceiptDone?.(); }} onAdd={onAddReceipt} venmoHandle={venmoHandle} zelleHandle={zelleHandle} friends={friends} homeCurrency={homeCurrency} tripCurrency={tripCurrency} exchangeRate={exchangeRate} t={t}/>}
       {showTrip&&<AddTripSheet onClose={()=>setShowTrip(false)} onAdd={onAddTrip} t={t}/>}
       {quickAdd&&<QuickAddSheet category={quickAdd.l} categoryIcon={quickAdd.icon} trips={trips} onClose={()=>{ setQuickAdd(null); onReceiptDone?.(); }} onAdd={onAddReceipt} venmoHandle={venmoHandle} zelleHandle={zelleHandle} homeCurrency={homeCurrency} tripCurrency={tripCurrency} exchangeRate={exchangeRate} t={t}/>}
     </div>
@@ -2402,7 +2794,7 @@ function QuickAddSheet({ category, categoryIcon, trips, onClose, onAdd, venmoHan
   // PAY
   if (mode === "pay" && savedReceipt) return (
     <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:300, display:"flex", flexDirection:"column", justifyContent:"flex-end" }}>
-      <PayStep receipt={savedReceipt} onClose={onClose} onBack={()=>setMode("confirm")} venmoHandle={venmoHandle} zelleHandle={zelleHandle} t={t}/>
+      <PayStep receipt={savedReceipt} onClose={onClose} onBack={()=>setMode("confirm")} venmoHandle={venmoHandle} zelleHandle={zelleHandle} friends={friends} t={t}/>
     </div>
   );
 
@@ -3164,6 +3556,11 @@ export default function Splittt() {
   const [showVenmo, setShowVenmo] = useState(null);
   const [activeTrip, setActiveTrip] = useState(null);
   const [loaded, setLoaded] = useState(false);
+  const [shareModal, setShareModal] = useState(null); // trip object to share
+  // Shared trip URL mode
+  const [sharedTripId] = useState(() => new URLSearchParams(window.location.search).get("trip"));
+  const [sharedTripJoined, setSharedTripJoined] = useState(null); // { trip, myName }
+  const [myName] = useState(() => lsGet("splittt_myName") || "");
   const [venmoHandle, setVenmoHandle] = useState("");
   const [zelleHandle, setZelleHandle] = useState("");
   const [homeCurrency, setHomeCurrency] = useState("USD");
@@ -3221,6 +3618,23 @@ export default function Splittt() {
     </div>
   );
 
+  // ── Shared trip routing ────────────────────────────────────────────────────
+  if (sharedTripId) {
+    // If already joined (name set), show the shared trip view
+    if (sharedTripJoined) {
+      return <SharedTripView trip={sharedTripJoined.trip} myName={sharedTripJoined.myName} onBack={()=>{ window.history.replaceState({},"",window.location.pathname); window.location.reload(); }} onVenmo={setShowVenmo} t={t}/>;
+    }
+    // If we have a saved name, auto-join
+    if (myName) {
+      return <SharedTripView trip={{ id: sharedTripId, name:"Shared Trip", members:[] }} myName={myName} onBack={()=>{ window.history.replaceState({},"",window.location.pathname); window.location.reload(); }} onVenmo={setShowVenmo} t={t}/>;
+    }
+    // Otherwise show join prompt
+    return <JoinTripPrompt tripId={sharedTripId} t={t}
+      onJoin={(trip, name) => setSharedTripJoined({ trip, myName: name })}
+      onCancel={() => { window.history.replaceState({},"",window.location.pathname); window.location.reload(); }}
+    />;
+  }
+
   const NAV = [
     { id:"feed",    label:"Feed",    icon:<svg width="17" height="17" viewBox="0 0 17 17" fill="none"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" strokeWidth="1.4"/><rect x="10" y="1.5" width="5.5" height="5.5" rx="1.5" stroke="currentColor" strokeWidth="1.4"/><rect x="1.5" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" strokeWidth="1.4"/><rect x="10" y="10" width="5.5" height="5.5" rx="1.5" stroke="currentColor" strokeWidth="1.4"/></svg> },
     { id:"trips",   label:"Trips",   icon:<svg width="17" height="17" viewBox="0 0 17 17" fill="none"><path d="M2 8.5h13M8.5 2l6.5 6.5-6.5 6.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg> },
@@ -3241,7 +3655,7 @@ export default function Splittt() {
   }
 
   return (
-    <div id="app-root" style={{ fontFamily:"'DM Sans',sans-serif", background:t.bg, height:"100vh", overflowY:"auto", overflowX:"hidden", color:t.text, maxWidth:430, width:"100%", margin:"0 auto", transition:"background 0.25s ease, color 0.25s ease", position:"relative", transform:"translateZ(0)", willChange:"transform" }}>
+    <div id="app-root" style={{ fontFamily:"'DM Sans',sans-serif", background:t.bg, minHeight:"100vh", color:t.text, maxWidth:430, width:"100%", margin:"0 auto", transition:"background 0.25s ease, color 0.25s ease", position:"relative", transform:"translateZ(0)" }}>
       <style>{STYLES}</style>
 
       {/* Top bar */}
@@ -3294,7 +3708,10 @@ export default function Splittt() {
                     </div>
                     <div style={{ fontSize:11, color:t.textMuted }}>{settled}/{tR.length} settled</div>
                   </div>
-                  <AvatarStack people={trip.memberNames} size={20} t={t}/>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <button className="press" onClick={e=>{e.stopPropagation();setShareModal(trip);}} style={{ padding:"5px 10px", background:t.surface, border:`1px solid ${t.border}`, borderRadius:8, color:t.textSecondary, fontSize:11, fontWeight:600 }}>Share</button>
+                    <AvatarStack people={trip.memberNames} size={20} t={t}/>
+                  </div>
                 </div>
               </div>
             );
@@ -3311,7 +3728,7 @@ export default function Splittt() {
       )}
 
       {/* Bottom nav */}
-      <div style={{ position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, background:t.navBg, backdropFilter:"blur(20px)", borderTop:`1px solid ${t.border}`, padding:"8px 10px 22px", display:"flex", justifyContent:"space-around", alignItems:"center", zIndex:50, transition:"background 0.25s ease" }}>
+      <div style={{ position:"fixed", bottom:0, left:0, right:0, background:t.navBg, backdropFilter:"blur(20px)", borderTop:`1px solid ${t.border}`, padding:"8px 10px 22px", display:"flex", justifyContent:"space-around", alignItems:"center", zIndex:50, transition:"background 0.25s ease" }}>
         {NAV.map(n=>{
           if(n.id==="plus") return (
             <button key="plus" className="press" onClick={()=>setTab("plus")} style={{ width:46,height:46,borderRadius:13,background:tab==="plus"?t.accent:t.surface,border:`1px solid ${tab==="plus"?t.accent:t.border}`,display:"flex",alignItems:"center",justifyContent:"center",marginTop:-10,boxShadow:tab==="plus"?`0 4px 18px ${t.accent}44`:`0 2px 8px rgba(0,0,0,0.12)`,transition:"all 0.2s ease" }}>
@@ -3342,6 +3759,7 @@ export default function Splittt() {
         t={t}
       />}
       {showVenmo&&<VenmoModal data={showVenmo} onClose={()=>setShowVenmo(null)} venmoHandle={venmoHandle} zelleHandle={zelleHandle} t={t}/>}
+      {shareModal&&<ShareTripModal trip={shareModal} t={t} onClose={()=>setShareModal(null)} onShared={updated=>{setTrips(prev=>prev.map(x=>x.id===updated.id?updated:x));setShareModal(updated);}}/>}
     </div>
   );
 }
