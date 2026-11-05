@@ -791,8 +791,8 @@ function PayStep({ receipt, onClose, onBack, venmoHandle="", zelleHandle="", fri
             {nonPayers.map((p, i) => {
               const amt = personTotals?.[p] || (allPeople.length > 0 ? total / allPeople.length : 0);
               const color = PERSON_COLORS[i % PERSON_COLORS.length];
-              const venmoUrl = `https://venmo.com/u/${encodeURIComponent(p)}`;
-              const zelleUrl = `https://enroll.zellepay.com/`;
+              const venmoUrl = getFriendVenmo(p) ? `https://venmo.com/u/${encodeURIComponent(getFriendVenmo(p))}` : `https://venmo.com/u/${encodeURIComponent(p)}`;
+              const zelleUrl = getFriendZelle(p) ? `zelle://send?recipients=${encodeURIComponent(getFriendZelle(p))}&amount=${amt.toFixed(2)}` : `https://enroll.zellepay.com/`;
               return (
                 <div key={p} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"13px 16px", borderBottom:i < nonPayers.length-1 ? `1px solid ${t.border}` : "none" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10 }}>
@@ -2084,7 +2084,7 @@ function ReceiptCard({ r, onClick, onVenmo, t, delay=0 }) {
 }
 
 // ── TRIP DETAIL (with add receipt button) ─────────────────────────────────────
-function TripDetail({ trip, allReceipts, onBack, onVenmo, onAddReceipt, onUpdateReceipt, onUpdateTrip, t }) {
+function TripDetail({ trip, allReceipts, onBack, onVenmo, onAddReceipt, onUpdateReceipt, onUpdateTrip, friends=[], t }) {
   const [showReceipt, setShowReceipt] = useState(null);
   const [showAddReceipt, setShowAddReceipt] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -2400,7 +2400,7 @@ function TripDetail({ trip, allReceipts, onBack, onVenmo, onAddReceipt, onUpdate
                       <div style={{ height:1, background:t.border, margin:"12px 0 10px" }}/>
                       <div style={{ fontSize:11, color:t.textMuted, textAlign:"center", marginBottom: owesYou > 0 ? 12 : 0 }}>sp/itt. · {trip.name}</div>
                       {owesYou > 0 && (
-                        <button className="press" onClick={()=>window.open(`https://venmo.com/u/${encodeURIComponent(person)}`, "_blank")} style={{ width:"100%", padding:"11px", background:"#3D95CE", border:"none", borderRadius:9, color:"#fff", fontSize:13, fontWeight:600, display:"flex", alignItems:"center", justifyContent:"center", gap:7 }}>
+                        <button className="press" onClick={()=>{ const f=friends.find(fr=>fr.name===person); const h=f?.venmo?f.venmo.replace(/^@/,""):person; window.open(`https://venmo.com/u/${encodeURIComponent(h)}`,"_blank"); }} style={{ width:"100%", padding:"11px", background:"#3D95CE", border:"none", borderRadius:9, color:"#fff", fontSize:13, fontWeight:600, display:"flex", alignItems:"center", justifyContent:"center", gap:7 }}>
                           <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M12.5 2C11.3 4.5 9.5 7.4 8 9.2L6.2 4H2.5L5.5 14h3.8C11.5 11 14 6.5 14 4c0-1-.5-1.8-1.5-2z" fill="#fff"/></svg>
                           Request ${owesYou.toFixed(2)} from {person}
                         </button>
@@ -3612,8 +3612,9 @@ export default function Splittt() {
 
   if (!loaded) return (
     <div style={{ fontFamily:"'DM Sans',sans-serif", background:"#F7F6F2", minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center" }}>
-      <div style={{ fontSize:22, fontWeight:800, fontFamily:"'Syne',sans-serif", letterSpacing:-0.5, color:"#1A1A18" }}>
-        sp/itt<span style={{ display:"inline-block", width:5, height:5, borderRadius:"50%", background:"#1A1A18", marginLeft:2, marginBottom:2 }}/>
+      <div style={{ display:"flex", alignItems:"center", gap:0 }}>
+        <span style={{ fontSize:28, fontWeight:900, fontFamily:"'Syne',sans-serif", letterSpacing:-1.5, color:"#1A1A18", lineHeight:1 }}>sp/itt</span>
+        <span style={{ display:"inline-block", width:8, height:8, background:"#E8520A", borderRadius:1, marginLeft:3, marginBottom:-2, flexShrink:0 }}/>
       </div>
     </div>
   );
@@ -3648,7 +3649,7 @@ export default function Splittt() {
     return (
       <>
         <style>{STYLES}</style>
-        <TripDetail trip={live} allReceipts={receipts} onBack={()=>setActiveTrip(null)} onVenmo={setShowVenmo} onAddReceipt={r=>setReceipts(p=>[r,...p])} onUpdateReceipt={updated=>{ if(updated._deleted) setReceipts(prev=>prev.filter(x=>x.id!==updated.id)); else setReceipts(prev=>prev.map(x=>x.id===updated.id?updated:x)); }} onUpdateTrip={updated=>{setTrips(prev=>prev.map(x=>x.id===updated.id?updated:x));setActiveTrip(updated);}} t={t}/>
+        <TripDetail trip={live} allReceipts={receipts} onBack={()=>setActiveTrip(null)} onVenmo={setShowVenmo} onAddReceipt={r=>setReceipts(p=>[r,...p])} onUpdateReceipt={updated=>{ if(updated._deleted) setReceipts(prev=>prev.filter(x=>x.id!==updated.id)); else setReceipts(prev=>prev.map(x=>x.id===updated.id?updated:x)); }} onUpdateTrip={updated=>{setTrips(prev=>prev.map(x=>x.id===updated.id?updated:x));setActiveTrip(updated);}} friends={friends} t={t}/>
         {showVenmo&&<VenmoModal data={showVenmo} onClose={()=>setShowVenmo(null)} venmoHandle={venmoHandle} zelleHandle={zelleHandle} t={t}/>}
       </>
     );
@@ -3660,9 +3661,10 @@ export default function Splittt() {
 
       {/* Top bar */}
       <div style={{ padding:"48px 20px 0", display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:tab==="feed"?18:20 }}>
-        <div style={{ fontSize:18, fontWeight:800, fontFamily:"'Syne',sans-serif", letterSpacing:-0.5, display:"flex", alignItems:"center", gap:5 }}>
-          sp/itt
-          <span style={{ width:5, height:5, borderRadius:"50%", background:t.accent, display:"inline-block", marginBottom:2 }}/>
+        <div style={{ display:"flex", alignItems:"center", gap:0 }}>
+          <span style={{ fontSize:19, fontWeight:900, fontFamily:"'Syne',sans-serif", letterSpacing:-1, color:t.text, lineHeight:1 }}>sp/it</span>
+          <span style={{ fontSize:19, fontWeight:900, fontFamily:"'Syne',sans-serif", letterSpacing:-1, color:t.text, lineHeight:1 }}>t</span>
+          <span style={{ display:"inline-block", width:6, height:6, background:"#E8520A", borderRadius:1, marginLeft:2, marginBottom:-1, flexShrink:0 }}/>
         </div>
         <Avatar name="A" size={32} t={t}/>
       </div>
@@ -3682,6 +3684,16 @@ export default function Splittt() {
 
       {tab==="trips"&&(
         <div style={{ padding:"0 20px 120px" }}>
+          {trips.length===0&&(
+            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", paddingTop:80, gap:16, textAlign:"center" }}>
+              <div style={{ fontSize:48 }}>✈️</div>
+              <div style={{ fontSize:20, fontWeight:800, fontFamily:"'Syne',sans-serif", color:t.text, letterSpacing:-0.5 }}>Start your first trip</div>
+              <div style={{ fontSize:14, color:t.textSecondary, maxWidth:220, lineHeight:1.5 }}>Group trips, vacations, dinners — track shared expenses and settle up fast.</div>
+              <button className="press" onClick={()=>setShowTrip(true)} style={{ marginTop:8, background:t.accent, color:"#fff", border:"none", borderRadius:12, padding:"13px 28px", fontSize:14, fontWeight:700, fontFamily:"'Syne',sans-serif", letterSpacing:-0.3 }}>
+                + New Trip
+              </button>
+            </div>
+          )}
           {trips.map((trip,i)=>{
             const tR=receipts.filter(r=>r.trip===trip.name&&!r.archived);
             const total=tR.reduce((a,r)=>a+r.total,0);
