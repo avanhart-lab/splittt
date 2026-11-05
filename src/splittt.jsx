@@ -2490,7 +2490,7 @@ function PlusTab({ trips, onAddReceipt, onReceiptDone, onAddTrip, venmoHandle, z
   const [quickAdd, setQuickAdd] = useState(null); // { category, icon }
 
   const QUICK_CATS = [
-    { l:"Food & drinks", icon:<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 6c0-1.7 1.3-4 4-4s4 2.3 4 4c0 2.5-1.8 4-4 4S3 8.5 3 6z" stroke="currentColor" strokeWidth="1.2"/><path d="M12 3v10M10 5h4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg> },
+    { l:"Food & drinks", icon:<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M5 2v4c0 1.1.9 2 2 2v5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M5 2v2M7 2v2M9 2v2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M11 2v3.5a1.5 1.5 0 0 1-1.5 1.5V13" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg> },
     { l:"Accommodation", icon:<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 14V7l6-4 6 4v7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><rect x="5.5" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.2"/></svg> },
     { l:"Transport",     icon:<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 10l2-5h8l2 5v2H2v-2z" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/><circle cx="5.5" cy="12" r="1.2" stroke="currentColor" strokeWidth="1.1"/><circle cx="10.5" cy="12" r="1.2" stroke="currentColor" strokeWidth="1.1"/></svg> },
     { l:"Activities",   icon:<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><polygon points="8,1 9.8,5.8 15,5.8 10.8,8.8 12.4,14 8,11 3.6,14 5.2,8.8 1,5.8 6.2,5.8" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/></svg> },
@@ -3613,7 +3613,7 @@ export default function Splittt() {
   if (!loaded) return (
     <div style={{ fontFamily:"'DM Sans',sans-serif", background:"#F7F6F2", minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center" }}>
       <div style={{ display:"flex", alignItems:"center", gap:0 }}>
-        <span style={{ fontSize:28, fontWeight:900, fontFamily:"'Syne',sans-serif", letterSpacing:-1.5, color:"#1A1A18", lineHeight:1 }}>sp/itt</span>
+        <span style={{ fontSize:28, fontWeight:900, fontFamily:"'Syne',sans-serif", letterSpacing:-1.5, color:"#1A1A18", lineHeight:1 }}>sp/it</span>
         <span style={{ display:"inline-block", width:8, height:8, background:"#E8520A", borderRadius:1, marginLeft:3, marginBottom:-2, flexShrink:0 }}/>
       </div>
     </div>
@@ -3663,7 +3663,6 @@ export default function Splittt() {
       <div style={{ padding:"48px 20px 0", display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:tab==="feed"?18:20 }}>
         <div style={{ display:"flex", alignItems:"center", gap:0 }}>
           <span style={{ fontSize:19, fontWeight:900, fontFamily:"'Syne',sans-serif", letterSpacing:-1, color:t.text, lineHeight:1 }}>sp/it</span>
-          <span style={{ fontSize:19, fontWeight:900, fontFamily:"'Syne',sans-serif", letterSpacing:-1, color:t.text, lineHeight:1 }}>t</span>
           <span style={{ display:"inline-block", width:6, height:6, background:"#E8520A", borderRadius:1, marginLeft:2, marginBottom:-1, flexShrink:0 }}/>
         </div>
         <Avatar name="A" size={32} t={t}/>
@@ -3671,10 +3670,13 @@ export default function Splittt() {
 
       {/* Section heading for non-feed tabs */}
       {tab!=="feed"&&tab!=="plus"&&tab!=="settings"&&tab!=="friends"&&(
-        <div style={{ padding:"0 20px 14px", display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
+        <div style={{ padding:"0 20px 14px" }}>
           <div style={{ fontSize:22, fontWeight:700, fontFamily:"'Syne',sans-serif", color:t.text }}>
             {tab==="trips"?"Trips":tab==="archive"?"Archive":""}
           </div>
+          {tab==="trips"&&(
+            <div style={{ fontSize:13, color:t.textSecondary, marginTop:3 }}>Group receipts into one shared log</div>
+          )}
         </div>
       )}
 
@@ -3685,12 +3687,16 @@ export default function Splittt() {
       {tab==="trips"&&(
         <div style={{ padding:"0 20px 120px" }}>
           {trips.length===0&&(
-            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", paddingTop:80, gap:16, textAlign:"center" }}>
-              <div style={{ fontSize:48 }}>✈️</div>
-              <div style={{ fontSize:20, fontWeight:800, fontFamily:"'Syne',sans-serif", color:t.text, letterSpacing:-0.5 }}>Start your first trip</div>
-              <div style={{ fontSize:14, color:t.textSecondary, maxWidth:220, lineHeight:1.5 }}>Group trips, vacations, dinners — track shared expenses and settle up fast.</div>
-              <button className="press" onClick={()=>setShowTrip(true)} style={{ marginTop:8, background:t.accent, color:"#fff", border:"none", borderRadius:12, padding:"13px 28px", fontSize:14, fontWeight:700, fontFamily:"'Syne',sans-serif", letterSpacing:-0.3 }}>
-                + New Trip
+            <div style={{ marginTop:8 }}>
+              <button className="press" onClick={()=>setShowTrip(true)} style={{ width:"100%", background:t.surface, border:`1px solid ${t.border}`, borderRadius:16, padding:"18px 20px", display:"flex", alignItems:"center", gap:16, textAlign:"left", cursor:"pointer" }}>
+                <div style={{ width:48, height:48, borderRadius:12, background:t.inputBg, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                  <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 19L7 10l4 4 4-6 4 7" stroke={t.textSecondary} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><circle cx="17" cy="5" r="2" stroke={t.textSecondary} strokeWidth="1.5"/></svg>
+                </div>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:15, fontWeight:700, color:t.text, marginBottom:3 }}>Start a trip</div>
+                  <div style={{ fontSize:13, color:t.textSecondary, lineHeight:1.4 }}>Group receipts into one shared log</div>
+                </div>
+                <svg width="8" height="14" viewBox="0 0 8 14" fill="none"><path d="M1 1l6 6-6 6" stroke={t.textMuted} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </button>
             </div>
           )}
