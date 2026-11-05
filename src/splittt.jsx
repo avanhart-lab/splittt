@@ -238,7 +238,7 @@ Rules:
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": (window.__ANTHROPIC_KEY__ || ""),
+        "x-api-key": (import.meta.env.VITE_ANTHROPIC_KEY || window.__ANTHROPIC_KEY__ || ""),
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true",
       },
