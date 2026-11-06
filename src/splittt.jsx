@@ -3661,7 +3661,7 @@ export default function Splittt() {
       {/* Top bar */}
       <div style={{ padding:"48px 20px 0", display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:tab==="feed"?18:20 }}>
         <div style={{ fontSize:18, fontWeight:800, fontFamily:"'Syne',sans-serif", letterSpacing:-0.5, display:"flex", alignItems:"center", gap:5 }}>
-          sp/itt
+          sp/it
           <span style={{ width:5, height:5, borderRadius:"50%", background:t.accent, display:"inline-block", marginBottom:2 }}/>
         </div>
         <Avatar name="A" size={32} t={t}/>
